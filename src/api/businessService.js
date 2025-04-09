@@ -189,37 +189,37 @@ export const createBusiness = async (businessData) => {
 };
 
 // Update business information (for business owners)
-export const updateBusiness = async (id, updates) => {
+export const submitBusinessUpdate = async (businessId, updates) => {
   try {
-    // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError) throw userError;
 
-    // Get the business to verify ownership
+    // Check business ownership
     const { data: business, error: businessError } = await supabase
       .from('businesses')
       .select('owner_id')
-      .eq('id', id)
+      .eq('id', businessId)
       .single();
 
     if (businessError) throw businessError;
+    if (business.owner_id !== user.id) throw new Error('Not authorized');
 
-    // Verify that the current user is the owner
-    if (business.owner_id !== user.id) {
-      throw new Error('You are not authorized to update this business');
-    }
-
-    // Update the business
+    // Insert update request
     const { data, error } = await supabase
-      .from('businesses')
-      .update(updates)
-      .eq('id', id)
+      .from('business_updates')
+      .insert({
+        business_id: businessId,
+        owner_id: user.id,
+        updates, // store as JSONB
+        status: 'pending',
+        submitted_at: new Date()
+      })
       .select();
 
     if (error) throw error;
     return data[0];
   } catch (error) {
-    console.error('Error updating business:', error.message);
+    console.error('Error submitting business update:', error.message);
     throw error;
   }
 };
@@ -703,6 +703,78 @@ export const getBusinessesPendingDeletion = async () => {
     throw error;
   }
 };
+
+export const getPendingBusinessUpdates = async () => {
+  try {
+    const isAdmin = await checkAdminPrivileges();
+    if (!isAdmin) throw new Error('Admin access only');
+
+    const { data, error } = await supabase
+      .from('business_updates')
+      .select(`
+        *,
+        businesses (name, id),
+        profiles (id, email, display_name)
+      `)
+      .eq('status', 'pending')
+      .order('submitted_at', { ascending: true });
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching pending updates:', error.message);
+    throw error;
+  }
+};
+
+export const handleBusinessUpdateApproval = async (updateId, approve = true, rejectionReason = null) => {
+  try {
+    const isAdmin = await checkAdminPrivileges();
+    if (!isAdmin) throw new Error('Admin access only');
+
+    // Fetch the update
+    const { data: update, error: updateError } = await supabase
+      .from('business_updates')
+      .select('*')
+      .eq('id', updateId)
+      .single();
+
+    if (updateError) throw updateError;
+
+    if (approve) {
+      // Apply the updates to the business record
+      await supabase
+        .from('businesses')
+        .update(update.updates)
+        .eq('id', update.business_id);
+
+      // Mark the update as approved
+      await supabase
+        .from('business_updates')
+        .update({
+          status: 'approved',
+          reviewed_at: new Date()
+        })
+        .eq('id', updateId);
+    } else {
+      // Reject with reason
+      await supabase
+        .from('business_updates')
+        .update({
+          status: 'rejected',
+          rejection_reason: rejectionReason,
+          reviewed_at: new Date()
+        })
+        .eq('id', updateId);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error processing update request:', error.message);
+    throw error;
+  }
+};
+
 
 // Helper function to check admin privileges
 async function checkAdminPrivileges() {
