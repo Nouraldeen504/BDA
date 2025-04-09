@@ -5,6 +5,8 @@ export const BUSINESS_STATUS = {
   PENDING: 'pending',
   APPROVED: 'approved',
   REJECTED: 'rejected',
+  DELETION_REQUESTED: 'deletion_requested',
+  DELETED: 'deleted'
 };
 
 // Get all approved businesses
@@ -17,7 +19,9 @@ export const getAllBusinesses = async () => {
         categories (id, name),
         reviews (id, rating)
       `)
-      .eq('status', BUSINESS_STATUS.APPROVED);
+      .eq('status', BUSINESS_STATUS.APPROVED)
+      .eq('status', BUSINESS_STATUS.APPROVED)
+      .not('status', 'eq', BUSINESS_STATUS.DELETED);
 
     if (error) throw error;
 
@@ -52,7 +56,9 @@ export const searchBusinesses = async (query, filters = {}) => {
         categories (id, name),
         reviews (id, rating)
       `)
-      .eq('status', BUSINESS_STATUS.APPROVED);
+      .eq('status', BUSINESS_STATUS.APPROVED)
+      .eq('status', BUSINESS_STATUS.APPROVED)
+      .not('status', 'eq', BUSINESS_STATUS.DELETED);
 
     // Apply search query if provided
     if (query) {
@@ -132,6 +138,7 @@ export const getBusinessById = async (id) => {
       `)
       .eq('id', id)
       .eq('status', BUSINESS_STATUS.APPROVED)
+      .not('status', 'eq', BUSINESS_STATUS.DELETED)
       .single();
 
     if (error) throw error;
@@ -231,7 +238,9 @@ export const getBusinessesByOwner = async () => {
         categories (id, name),
         reviews (id, rating)
       `)
-      .eq('owner_id', user.id);
+      .eq('owner_id', user.id)
+      .eq('status', BUSINESS_STATUS.APPROVED)
+      .not('status', 'eq', BUSINESS_STATUS.DELETED)
 
     if (error) throw error;
 
@@ -436,3 +445,277 @@ export const isBusinessBookmarked = async (businessId) => {
     throw error;
   }
 };
+
+
+// Request business deletion (business owner)
+export const requestBusinessDeletion = async (businessId, reason = '') => {
+  try {
+    // Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError) throw userError;
+
+    // Verify ownership
+    const { data: business, error: businessError } = await supabase
+      .from('businesses')
+      .select('owner_id, status')
+      .eq('id', businessId)
+      .single();
+
+    if (businessError) throw businessError;
+    if (!business) throw new Error('Business not found');
+    if (business.owner_id !== user.id) {
+      throw new Error('You are not authorized to delete this business');
+    }
+    if (business.status === BUSINESS_STATUS.DELETION_REQUESTED) {
+      throw new Error('Deletion already requested');
+    }
+    if (business.status === BUSINESS_STATUS.DELETED) {
+      throw new Error('Business already deleted');
+    }
+
+    // Request deletion
+    const { data, error } = await supabase
+      .from('businesses')
+      .update({
+        status: BUSINESS_STATUS.DELETION_REQUESTED,
+        deletion_requested: true,
+        deletion_requested_at: new Date(),
+        deletion_reason: reason
+      })
+      .eq('id', businessId)
+      .select();
+
+    if (error) throw error;
+
+    // Log this activity
+    await supabase
+      .from('activity_logs')
+      .insert({
+        user_id: user.id,
+        business_id: businessId,
+        activity_type: 'deletion_requested',
+        description: `Requested business deletion: ${reason}`,
+        metadata: { reason }
+      });
+
+    return { 
+      success: true, 
+      message: 'Deletion request submitted for admin approval',
+      business: data[0]
+    };
+  } catch (error) {
+    console.error('Error requesting business deletion:', error.message);
+    throw error;
+  }
+};
+
+// Cancel deletion request (business owner)
+export const cancelDeletionRequest = async (businessId) => {
+  try {
+    // Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError) throw userError;
+
+    // Verify ownership and status
+    const { data: business, error: businessError } = await supabase
+      .from('businesses')
+      .select('owner_id, status')
+      .eq('id', businessId)
+      .single();
+
+    if (businessError) throw businessError;
+    if (!business) throw new Error('Business not found');
+    if (business.owner_id !== user.id) {
+      throw new Error('You are not authorized to modify this business');
+    }
+    if (business.status !== BUSINESS_STATUS.DELETION_REQUESTED) {
+      throw new Error('No pending deletion request to cancel');
+    }
+
+    // Cancel deletion request
+    const { data, error } = await supabase
+      .from('businesses')
+      .update({
+        status: BUSINESS_STATUS.APPROVED,
+        deletion_requested: false,
+        deletion_requested_at: null,
+        deletion_reason: null
+      })
+      .eq('id', businessId)
+      .select();
+
+    if (error) throw error;
+
+    // Log this activity
+    await supabase
+      .from('activity_logs')
+      .insert({
+        user_id: user.id,
+        business_id: businessId,
+        activity_type: 'deletion_cancelled',
+        description: 'Cancelled business deletion request'
+      });
+
+    return { 
+      success: true, 
+      message: 'Deletion request cancelled',
+      business: data[0]
+    };
+  } catch (error) {
+    console.error('Error cancelling deletion request:', error.message);
+    throw error;
+  }
+};
+
+// Approve business deletion (admin)
+export const approveBusinessDeletion = async (businessId) => {
+  try {
+    // Verify admin privileges (you'll need to implement your own admin check)
+    const isAdmin = await checkAdminPrivileges();
+    if (!isAdmin) throw new Error('Admin privileges required');
+
+    // Verify business status
+    const { data: business, error: businessError } = await supabase
+      .from('businesses')
+      .select('status, owner_id')
+      .eq('id', businessId)
+      .single();
+
+    if (businessError) throw businessError;
+    if (!business) throw new Error('Business not found');
+    if (business.status !== BUSINESS_STATUS.DELETION_REQUESTED) {
+      throw new Error('Business does not have a pending deletion request');
+    }
+
+    // Perform soft delete
+    const { data, error } = await supabase
+      .from('businesses')
+      .update({
+        status: BUSINESS_STATUS.DELETED,
+        is_deleted: true,
+        deleted_at: new Date()
+      })
+      .eq('id', businessId)
+      .select();
+
+    if (error) throw error;
+
+    // Log this activity
+    await supabase
+      .from('activity_logs')
+      .insert({
+        user_id: business.owner_id,
+        business_id: businessId,
+        activity_type: 'deletion_approved',
+        description: 'Admin approved business deletion',
+        admin_action: true
+      });
+
+    return { 
+      success: true, 
+      message: 'Business deletion approved',
+      business: data[0]
+    };
+  } catch (error) {
+    console.error('Error approving business deletion:', error.message);
+    throw error;
+  }
+};
+
+// Reject business deletion (admin)
+export const rejectBusinessDeletion = async (businessId, rejectionReason) => {
+  try {
+    // Verify admin privileges
+    const isAdmin = await checkAdminPrivileges();
+    if (!isAdmin) throw new Error('Admin privileges required');
+
+    // Verify business status
+    const { data: business, error: businessError } = await supabase
+      .from('businesses')
+      .select('status, owner_id')
+      .eq('id', businessId)
+      .single();
+
+    if (businessError) throw businessError;
+    if (!business) throw new Error('Business not found');
+    if (business.status !== BUSINESS_STATUS.DELETION_REQUESTED) {
+      throw new Error('Business does not have a pending deletion request');
+    }
+
+    // Reject deletion request
+    const { data, error } = await supabase
+      .from('businesses')
+      .update({
+        status: BUSINESS_STATUS.APPROVED,
+        deletion_requested: false,
+        deletion_requested_at: null,
+        deletion_reason: null
+      })
+      .eq('id', businessId)
+      .select();
+
+    if (error) throw error;
+
+    // Log this activity
+    await supabase
+      .from('activity_logs')
+      .insert({
+        user_id: business.owner_id,
+        business_id: businessId,
+        activity_type: 'deletion_rejected',
+        description: `Admin rejected business deletion: ${rejectionReason}`,
+        metadata: { rejectionReason },
+        admin_action: true
+      });
+
+    return { 
+      success: true, 
+      message: 'Business deletion rejected',
+      business: data[0]
+    };
+  } catch (error) {
+    console.error('Error rejecting business deletion:', error.message);
+    throw error;
+  }
+};
+
+// Get businesses pending deletion (admin)
+export const getBusinessesPendingDeletion = async () => {
+  try {
+    // Verify admin privileges
+    const isAdmin = await checkAdminPrivileges();
+    if (!isAdmin) throw new Error('Admin privileges required');
+
+    const { data, error } = await supabase
+      .from('businesses')
+      .select(`
+        *,
+        profiles (id, display_name, email),
+        categories (id, name)
+      `)
+      .eq('status', BUSINESS_STATUS.DELETION_REQUESTED)
+      .order('deletion_requested_at', { ascending: true });
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching businesses pending deletion:', error.message);
+    throw error;
+  }
+};
+
+// Helper function to check admin privileges
+async function checkAdminPrivileges() {
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error) throw error;
+  
+  // Implement your actual admin check logic here
+  // This might check a user role in your profiles table
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('is_admin')
+    .eq('id', user.id)
+    .single();
+    
+  return profile?.is_admin === true;
+}

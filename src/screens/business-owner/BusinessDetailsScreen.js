@@ -12,20 +12,24 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
-import { getBusinessById } from '../../api/businessService';
 import { getBusinessReviewStats } from '../../api/reviewService';
-import { BUSINESS_STATUS } from '../../api/businessService';
+import { getBusinessById, requestBusinessDeletion, cancelDeletionRequest, BUSINESS_STATUS } from '../../api/businessService';
+
 
 const statusColors = {
   [BUSINESS_STATUS.PENDING]: '#ffc107',
   [BUSINESS_STATUS.APPROVED]: '#28a745',
   [BUSINESS_STATUS.REJECTED]: '#dc3545',
+  [BUSINESS_STATUS.DELETION_REQUESTED]: '#fd7e14',
+  [BUSINESS_STATUS.DELETED]: '#6c757d',
 };
 
 const statusLabels = {
   [BUSINESS_STATUS.PENDING]: 'Pending Approval',
   [BUSINESS_STATUS.APPROVED]: 'Active',
   [BUSINESS_STATUS.REJECTED]: 'Rejected',
+  [BUSINESS_STATUS.DELETION_REQUESTED]: 'Deletion Requested',
+  [BUSINESS_STATUS.DELETED]: 'Deleted',
 };
 
 const BusinessDetailsScreen = ({ route, navigation }) => {
@@ -84,6 +88,65 @@ const BusinessDetailsScreen = ({ route, navigation }) => {
     navigation.navigate('CreateDeal', { businessId: business.id });
   };
 
+  // Handle delete request
+const handleDeleteRequest = async () => {
+  Alert.prompt(
+    'Request Business Deletion',
+    'Please provide a reason for deleting this business:',
+    [
+      {
+        text: 'Cancel',
+        style: 'cancel',
+      },
+      {
+        text: 'Submit',
+        onPress: async (reason) => {
+          try {
+            await requestBusinessDeletion(businessId, reason);
+            Alert.alert(
+              'Success',
+              'Your deletion request has been submitted for admin approval.'
+            );
+            fetchBusinessData(); // Refresh the business data
+          } catch (error) {
+            Alert.alert('Error', error.message);
+          }
+        },
+      },
+    ],
+    'plain-text'
+  );
+};
+
+// Handle cancel deletion request
+const handleCancelDeleteRequest = async () => {
+  Alert.alert(
+    'Cancel Deletion Request',
+    'Are you sure you want to cancel the deletion request?',
+    [
+      {
+        text: 'No',
+        style: 'cancel',
+      },
+      {
+        text: 'Yes',
+        onPress: async () => {
+          try {
+            await cancelDeletionRequest(businessId);
+            Alert.alert(
+              'Success',
+              'Deletion request has been cancelled.'
+            );
+            fetchBusinessData(); // Refresh the business data
+          } catch (error) {
+            Alert.alert('Error', error.message);
+          }
+        },
+      },
+    ]
+  );
+};
+
   // Show loading indicator
   if (isLoading) {
     return (
@@ -137,6 +200,14 @@ const BusinessDetailsScreen = ({ route, navigation }) => {
         <Text style={styles.statusText}>{statusLabels[business.status]}</Text>
         {business.status === BUSINESS_STATUS.REJECTED && business.rejection_reason && (
           <Text style={styles.rejectionText}>Reason: {business.rejection_reason}</Text>
+        )}
+        {business.status === BUSINESS_STATUS.DELETION_REQUESTED && business.deletion_reason && (
+          <Text style={styles.rejectionText}>Reason: {business.deletion_reason}</Text>
+        )}
+        {business.status === BUSINESS_STATUS.DELETION_REQUESTED && business.deletion_requested_at && (
+          <Text style={styles.rejectionText}>
+            Requested: {new Date(business.deletion_requested_at).toLocaleDateString()}
+          </Text>
         )}
       </View>
 
@@ -206,6 +277,24 @@ const BusinessDetailsScreen = ({ route, navigation }) => {
           <Ionicons name="pricetag-outline" size={20} color="#fff" />
           <Text style={styles.actionButtonText}>Create Deal</Text>
         </TouchableOpacity>
+        {business.status === BUSINESS_STATUS.DELETION_REQUESTED ? (
+          <TouchableOpacity 
+            style={[styles.actionButton, { backgroundColor: '#dc3545' }]}
+            onPress={handleCancelDeleteRequest}
+          >
+            <Ionicons name="close-circle-outline" size={20} color="#fff" />
+            <Text style={styles.actionButtonText}>Cancel Deletion</Text>
+          </TouchableOpacity>
+        ) : business.status !== BUSINESS_STATUS.DELETED && (
+          <TouchableOpacity 
+            style={[styles.actionButton, { backgroundColor: '#dc3545' }]}
+            onPress={handleDeleteRequest}
+            disabled={business.status === BUSINESS_STATUS.DELETED}
+          >
+            <Ionicons name="trash-outline" size={20} color="#fff" />
+            <Text style={styles.actionButtonText}>Delete Business</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Tabs */}
@@ -704,6 +793,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 8,
     flex: 1,
+  },
+  deleteButton: {
+    backgroundColor: '#dc3545',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 4,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  deleteButtonText: {
+    color: '#fff',
+    fontWeight: '500',
   },
 });
 

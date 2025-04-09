@@ -86,6 +86,34 @@ const BusinessDetailsScreen = ({ route, navigation }) => {
       setIsLoading(false);
     }
   };
+
+  const handleApproveDeletion = async () => {
+    try {
+      setIsLoading(true);
+      await approveBusinessDeletion(businessId);
+      Alert.alert('Deleted', `"${business.name}" has been removed.`);
+      navigation.goBack(); // Or redirect to list
+    } catch (error) {
+      console.error('Error approving deletion:', error);
+      Alert.alert('Error', 'Failed to delete business.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const handleRejectDeletion = async () => {
+    try {
+      setIsLoading(true);
+      await rejectBusinessDeletion(businessId);
+      setBusiness({ ...business, status: BUSINESS_STATUS.APPROVED }); // or previous state
+      Alert.alert('Restored', `"${business.name}" was not deleted.`);
+    } catch (error) {
+      console.error('Error rejecting deletion:', error);
+      Alert.alert('Error', 'Failed to reject deletion.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   if (isLoading) {
     return (
@@ -167,6 +195,25 @@ const BusinessDetailsScreen = ({ route, navigation }) => {
           >
             <Ionicons name="close-outline" size={18} color="#fff" />
             <Text style={styles.buttonText}>Reject</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {business.status === BUSINESS_STATUS.DELETION_REQUESTED && (
+        <View style={styles.actionButtons}>
+          <TouchableOpacity
+            style={styles.approveButton}
+            onPress={handleApproveDeletion}
+          >
+            <Ionicons name="trash-outline" size={18} color="#fff" />
+            <Text style={styles.buttonText}>Approve Deletion</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.rejectButton}
+            onPress={handleRejectDeletion}
+          >
+            <Ionicons name="refresh-outline" size={18} color="#fff" />
+            <Text style={styles.buttonText}>Reject Deletion</Text>
           </TouchableOpacity>
         </View>
       )}
